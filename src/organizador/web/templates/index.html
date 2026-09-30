@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="testigo" content="{{TESTIGO}}">
+  <title>Organizador de archivos</title>
+  <link rel="stylesheet" href="/static/estilos.css">
+</head>
+<body>
+  <header>
+    <h1>Organizador de archivos</h1>
+    <p class="sub">Analiza una carpeta y mueve lo que sobra a cuarentena. Nada se borra: todo se puede restaurar con
+      <code>organizador restore</code>.</p>
+  </header>
+
+  <main>
+    <section class="tarjeta" id="formulario">
+      <form id="form-analisis">
+        <label for="ruta">Carpeta a analizar</label>
+        <input id="ruta" name="ruta" type="text" required placeholder="C:\Users\tu-usuario\Descargas" autocomplete="off">
+        <details>
+          <summary>Opciones</summary>
+          <div class="opciones">
+            <label>Umbral de archivo grande (MB)
+              <input id="umbral" type="number" min="1" step="1" value="100">
+            </label>
+            <label>Excluir (patrones separados por comas)
+              <input id="excluir" type="text" placeholder="*.iso, fotos/originales">
+            </label>
+            <label>Extensiones basura adicionales
+              <input id="ext-basura" type="text" placeholder=".log, .cache">
+            </label>
+          </div>
+          <p class="nota">Siempre se excluyen <code>.git</code>, <code>node_modules</code>, <code>.venv</code> y la
+            propia cuarentena. Las rutas de sistema y raíces de unidad están bloqueadas.</p>
+        </details>
+        <button type="submit" id="btn-analizar">Analizar</button>
+      </form>
+      <p class="error" id="error" role="alert" hidden></p>
+    </section>
+
+    <section class="tarjeta" id="estado" hidden>
+      <div class="fila">
+        <strong id="estado-texto">Trabajando…</strong>
+        <button type="button" class="secundario" id="btn-cancelar">Cancelar</button>
+      </div>
+      <progress id="barra" max="1"></progress>
+    </section>
+
+    <section id="resultados" hidden>
+      <div class="tarjeta">
+        <div class="fila">
+          <h2>Resultados</h2>
+          <div class="acciones">
+            <button type="button" class="secundario" data-descarga="json">Descargar JSON</button>
+            <button type="button" class="secundario" data-descarga="csv">Descargar CSV</button>
+          </div>
+        </div>
+        <p class="nota" id="raiz"></p>
+        <div class="resumen" id="resumen"></div>
+      </div>
+      <div id="categorias"></div>
+      <div class="barra-aplicar">
+        <span id="seleccion">0 elementos seleccionados</span>
+        <button type="button" id="btn-aplicar" disabled>Mover a cuarentena…</button>
+      </div>
+    </section>
+
+    <section class="tarjeta" id="aplicado" hidden></section>
+  </main>
+
+  <dialog id="dialogo">
+    <form method="dialog">
+      <h2>Confirmar</h2>
+      <p id="dialogo-texto"></p>
+      <p class="nota">Antes de mover cada archivo se comprueba que no ha cambiado y que la copia conservada sigue
+        intacta. Todo queda registrado en un log para poder restaurarlo.</p>
+      <div class="acciones">
+        <button value="cancelar" class="secundario">Cancelar</button>
+        <button value="aceptar" id="btn-confirmar">Aplicar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer>organizador-archivos {{VERSION}} · servidor local en 127.0.0.1</footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

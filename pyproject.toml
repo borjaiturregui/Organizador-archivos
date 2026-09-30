@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "organizador-archivos"
+version = "1.0.0"
+description = "Análisis y organización segura de archivos: duplicados, grandes, basura y carpetas vacías, con cuarentena reversible."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Borja Iturregui" }]
+keywords = ["duplicados", "archivos", "cuarentena", "windows", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Console",
+    "Natural Language :: Spanish",
+]
+dependencies = ["typer>=0.12"]
+
+[project.optional-dependencies]
+web = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["pytest>=8", "httpx>=0.27", "fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.scripts]
+organizador = "organizador.cli:main"
+
+[project.urls]
+Repository = "https://github.com/borjaiturregui/Organizador-archivos"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"organizador.web" = ["static/*", "templates/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

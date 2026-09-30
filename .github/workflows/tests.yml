@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Instalar CLI sin extras (no debe arrastrar FastAPI)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          python -c "import importlib.util, sys; sys.exit(1 if importlib.util.find_spec('fastapi') else 0)"
+          organizador --help
+      - name: Instalar extras web y dev
+        run: pip install -e ".[web,dev]"
+      - name: Tests
+        run: pytest -v

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+# Salidas locales de la herramienta
+informe*.json
+informe*.csv
+_cuarentena_organizador/
+examples/demo/
