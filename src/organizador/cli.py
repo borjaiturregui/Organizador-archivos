@@ -7,7 +7,7 @@ import signal
 import sys
 import threading
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import typer
 
@@ -21,7 +21,6 @@ from organizador.analyzer import (
     normalizar_extensiones,
 )
 from organizador.quarantine import (
-    CATEGORIAS_POR_DEFECTO,
     OperacionRechazada,
     Resultado,
     aplicar,
@@ -66,7 +65,7 @@ class _Ctrl_C:
 
     def __init__(self) -> None:
         self.evento = threading.Event()
-        self._anterior = None
+        self._anterior: Any = None
 
     def __enter__(self) -> threading.Event:
         if threading.current_thread() is threading.main_thread():
@@ -149,6 +148,9 @@ def analyze(
         usar_exclusiones_por_defecto=not sin_exclusiones_por_defecto,
         permitir_sistema=permitir_sistema,
     )
+    for destino in (output, csv):
+        if destino is not None and not destino.resolve().parent.is_dir():
+            raise _error(f"la carpeta de destino de '{destino}' no existe")
     with _Ctrl_C() as cancelar:
         try:
             informe = analizar(ruta, opciones, cancelar=cancelar, progreso=_progreso())
@@ -158,12 +160,15 @@ def analyze(
             raise _error("análisis cancelado", 130) from None
 
     typer.echo(informe.a_texto(limite=limite))
-    if output:
-        informe.guardar_json(output)
-        typer.secho(f"\nInforme JSON guardado en {output}", fg=typer.colors.GREEN)
-    if csv:
-        informe.guardar_csv(csv)
-        typer.secho(f"Informe CSV guardado en {csv}", fg=typer.colors.GREEN)
+    try:
+        if output:
+            informe.guardar_json(output)
+            typer.secho(f"\nInforme JSON guardado en {output}", fg=typer.colors.GREEN)
+        if csv:
+            informe.guardar_csv(csv)
+            typer.secho(f"Informe CSV guardado en {csv}", fg=typer.colors.GREEN)
+    except OSError as e:
+        raise _error(f"no se pudo guardar el informe: {e.strerror or e}") from None
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +246,9 @@ def restore(
         raise _error(f"no se puede leer el log: {e}") from None
     typer.echo(f"Raíz: {datos.raiz}\nSe restaurarán hasta {len(datos.movidos)} archivos "
                f"y {len(datos.carpetas)} carpetas.")
+    if datos.lineas_ignoradas:
+        typer.secho(f"Aviso: {datos.lineas_ignoradas} líneas incompletas o corruptas del log se ignorarán "
+                    "(p. ej. por un corte durante apply).", fg=typer.colors.YELLOW)
     if not (datos.movidos or datos.carpetas):
         typer.echo("Nada que restaurar.")
         return
@@ -263,6 +271,8 @@ def _mostrar_resultado(resultado: Resultado, verbo: str) -> None:
         typer.secho(f"{len(resultado.omitidos)} omitidos:", fg=typer.colors.YELLOW)
         for i in resultado.omitidos:
             typer.echo(f"  {i.ruta}  ({i.motivo})")
+    for aviso in resultado.avisos:
+        typer.secho(f"Aviso: {aviso}", fg=typer.colors.YELLOW)
     if resultado.cancelado:
         typer.secho("Operación cancelada: lo ya hecho queda registrado en el log.", fg=typer.colors.YELLOW)
     typer.echo(f"Log: {resultado.log}")

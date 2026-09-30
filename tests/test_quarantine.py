@@ -334,3 +334,64 @@ def test_cancelar_a_mitad_deja_log_coherente(raiz: Path) -> None:
     assert len(movidos_log) == 2
     restaurar(resultado.log)
     assert len(list(raiz.glob("*.tmp"))) == 4
+
+
+# ------------------------------------------------ log robusto ante cortes
+def test_restaurar_con_ultima_linea_cortada(raiz: Path) -> None:
+    for i in range(3):
+        crear(raiz, f"f{i}.tmp", str(i))
+    resultado = aplicar(plan_por_categorias(analizar(raiz), "basura"))
+    texto = Path(resultado.log).read_text(encoding="utf-8")
+    Path(resultado.log).write_text(texto[:-15], encoding="utf-8")  # apagón a mitad de línea
+    rest = restaurar(resultado.log)
+    assert len(rest.movidos) == 3
+    assert rest.avisos and "1 líneas incompletas" in rest.avisos[0]
+    assert len(list(raiz.glob("*.tmp"))) == 3
+
+
+def test_log_con_cabecera_corrupta_se_rechaza(tmp_path: Path) -> None:
+    (tmp_path / "x.jsonl").write_text('{"tipo": "cabec\n', encoding="utf-8")
+    with pytest.raises(OperacionRechazada):
+        leer_log(tmp_path / "x.jsonl")
+
+
+def test_registro_previo_al_movimiento(raiz: Path) -> None:
+    crear(raiz, "a.tmp", "x")
+    resultado = aplicar(plan_por_categorias(analizar(raiz), "basura"))
+    tipos = [e["tipo"] for e in lineas_log(resultado.log)]
+    assert tipos.index("intento") < tipos.index("movido")
+
+
+def test_restaurar_movimiento_sin_confirmar(raiz: Path) -> None:
+    """Corte entre mover y anotar 'movido': el intento basta para restaurar."""
+    crear(raiz, "a.tmp", "x")
+    crear(raiz, "b.tmp", "y")
+    resultado = aplicar(plan_por_categorias(analizar(raiz), "basura"))
+    lineas = Path(resultado.log).read_text(encoding="utf-8").splitlines()
+    sin_movidos = [linea for linea in lineas if json.loads(linea)["tipo"] != "movido"]
+    Path(resultado.log).write_text("\n".join(sin_movidos) + "\n", encoding="utf-8")
+    log = leer_log(resultado.log)
+    assert len(log.sin_confirmar) == 2
+    rest = restaurar(resultado.log)
+    assert len(rest.movidos) == 2 and rest.omitidos == []
+    assert (raiz / "a.tmp").exists() and (raiz / "b.tmp").exists()
+
+
+def test_intento_que_no_llego_a_mover_se_ignora_en_silencio(raiz: Path) -> None:
+    crear(raiz, "a.tmp", "x")
+    resultado = aplicar(plan_por_categorias(analizar(raiz), "basura"))
+    cab = Path(resultado.log).read_text(encoding="utf-8").splitlines()[0]
+    fantasma = json.dumps({"tipo": "intento", "origen": str(raiz / "nunca.tmp"),
+                           "destino": str(cuarentena(raiz) / "nunca.tmp")})
+    Path(resultado.log).write_text(cab + "\n" + fantasma + "\n", encoding="utf-8")
+    rest = restaurar(resultado.log)
+    assert rest.movidos == [] and rest.omitidos == []
+
+
+# ------------------------------------------- cuarentena con otro nombre
+def test_cuarentena_personalizada_se_excluye_despues(raiz: Path) -> None:
+    crear(raiz, "a.tmp", "x")
+    aplicar(plan_por_categorias(analizar(raiz), "basura", cuarentena=raiz / "mi_cuarentena"))
+    informe = analizar(raiz)
+    assert informe.basura == [] and informe.total_archivos == 0
+    assert any(i.motivo == "carpeta de cuarentena" for i in informe.omitidos)

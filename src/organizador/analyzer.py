@@ -14,7 +14,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-from organizador import NOMBRE_CUARENTENA
+from organizador import MARCA_CUARENTENA, NOMBRE_CUARENTENA
 from organizador.report import Archivo, GrupoDuplicados, GrupoEnlaces, Incidencia, Informe
 from organizador.rutas import es_enlace, esta_dentro, normalizar, para_os, validar_raiz
 
@@ -163,6 +163,11 @@ class _Analisis:
                     inf.omitidos.append(Incidencia(ruta, "enlace simbólico o reparse point (no se sigue)"))
                     con_contenido.add(carpeta)
                 elif stat.S_ISDIR(st.st_mode):
+                    if os.path.lexists(para_os(os.path.join(ruta, MARCA_CUARENTENA))):
+                        # Cuarentena con nombre personalizado: nunca se vuelve a analizar.
+                        inf.omitidos.append(Incidencia(ruta, "carpeta de cuarentena"))
+                        con_contenido.add(carpeta)
+                        continue
                     hijos[carpeta].append(ruta)
                     pendientes.append(ruta)
                 elif stat.S_ISREG(st.st_mode):

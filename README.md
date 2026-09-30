@@ -25,8 +25,8 @@ Buscadores de duplicados hay muchos. Lo que aporta esta herramienta es la **segu
    de modificación más antigua → orden alfabético. No se confía en el informe.
 4. **Revalidación antes de cada movimiento**: existencia, tamaño y fecha del archivo y de
    la copia conservada; si el motivo es "duplicado", se vuelve a comparar el contenido (SHA-256).
-5. **Log por movimiento** (JSON Lines, escrito y sincronizado al momento) y `restore`
-   que **nunca sobrescribe**.
+5. **Log por movimiento** (JSON Lines, sincronizado a disco y escrito *antes* de cada
+   movimiento) y `restore` que **nunca sobrescribe** y tolera logs cortados por un apagón.
 6. **Web asíncrona** con progreso, cancelación y medidas de seguridad locales.
 7. **Consciente de Windows**: rutas de más de 260 caracteres, junctions/reparse points,
    mismo volumen obligatorio para la cuarentena, rutas de sistema bloqueadas.
@@ -105,6 +105,10 @@ Devuelve cada archivo a su ruta original en orden inverso y recrea las carpetas 
 eliminadas. Si en la ruta original ya existe un archivo, **no lo sobrescribe**: lo omite
 y lo indica. Genera su propio log `restauracion_log_*.jsonl`.
 
+Si `apply` se interrumpió (cierre, apagón), `restore` ignora la última línea incompleta
+del log con un aviso y restaura también los movimientos anotados como intento aunque
+no llegara a confirmarse.
+
 ## Interfaz web
 
 ```powershell
@@ -145,6 +149,8 @@ Para restaurar se usa la CLI (`organizador restore`), cuya orden exacta aparece 
 - La cuarentena debe estar en el **mismo volumen**: se mueve con `rename`, nunca con
   copiar+borrar. Si está en otra unidad, se rechaza.
 - Los enlaces simbólicos y *junctions* no se siguen; se listan como omitidos.
+- Toda cuarentena lleva un archivo `.organizador_cuarentena`, así que se excluye de los
+  análisis siguientes aunque tenga un nombre personalizado (`--cuarentena`).
 
 **De la web local**
 
