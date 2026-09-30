@@ -245,7 +245,7 @@ def test_informe_csv(raiz: Path, tmp_path: Path) -> None:
     assert texto.count("duplicado,1,") == 2
     informe.guardar_csv(tmp_path / "i.csv")
     assert (tmp_path / "i.csv").read_bytes().startswith(b"\xef\xbb\xbf")
-    assert "Duplicados: 1 grupos" in informe.a_texto()
+    assert "Duplicados: 1 grupo, 1 copia sobrante" in informe.a_texto()
 
 
 @pytest.mark.parametrize("datos", [
@@ -276,3 +276,11 @@ def test_sin_duplicados_con_tamanos_distintos(raiz: Path) -> None:
 def test_mtime_se_guarda_en_ns(raiz: Path) -> None:
     crear(raiz, "a.tmp", "x", mtime_ns=T_ANTIGUO)
     assert analizar(raiz).basura[0].mtime_ns == T_ANTIGUO
+
+
+def test_plural() -> None:
+    from organizador.report import plural
+
+    assert plural(1, "archivo") == "1 archivo"
+    assert plural(0, "archivo") == "0 archivos"
+    assert plural(2, "carpeta vacía", "carpetas vacías") == "2 carpetas vacías"

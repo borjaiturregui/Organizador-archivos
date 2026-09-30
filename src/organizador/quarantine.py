@@ -28,7 +28,7 @@ from typing import Any
 
 from organizador import MARCA_CUARENTENA, NOMBRE_CUARENTENA, __version__
 from organizador.analyzer import Cancelado, elegir_conservada, hash_archivo
-from organizador.report import Archivo, Incidencia, Informe
+from organizador.report import Archivo, Incidencia, Informe, plural
 from organizador.rutas import (
     ES_WINDOWS,
     RutaNoPermitida,
@@ -307,21 +307,32 @@ def planificar(informe: Informe, elegidos: Iterable[tuple[str, str]],
 # Log
 # ---------------------------------------------------------------------------
 class _Log:
-    """JSON Lines; cada línea se escribe y se sincroniza en el momento."""
+    """JSON Lines escrito línea a línea.
+
+    Solo se sincroniza a disco (fsync) lo que restore necesita para no perder un
+    archivo: los ``intento`` previos a actuar. Un fsync persiste además todo lo
+    escrito antes, y ``movido`` es informativo: si se pierde, restore lo trata
+    como intento sin confirmar. Al cerrar se sincroniza el resto una sola vez.
+    """
 
     def __init__(self, ruta: str, cabecera: dict[str, object]) -> None:
         self.ruta = ruta
         self._f = open(para_os(ruta), "x", encoding="utf-8")
         self.escribir({"tipo": "cabecera", **cabecera})
 
-    def escribir(self, entrada: dict[str, object]) -> None:
+    def escribir(self, entrada: dict[str, object], sincronizar: bool = False) -> None:
         entrada = {"fecha": datetime.now(timezone.utc).isoformat(timespec="seconds"), **entrada}
         self._f.write(json.dumps(entrada, ensure_ascii=False) + "\n")
         self._f.flush()
-        os.fsync(self._f.fileno())
+        if sincronizar:
+            os.fsync(self._f.fileno())
 
     def cerrar(self) -> None:
-        self._f.close()
+        try:
+            self._f.flush()
+            os.fsync(self._f.fileno())
+        finally:
+            self._f.close()
 
 
 def _ruta_log(carpeta: str, prefijo: str) -> str:
@@ -425,7 +436,8 @@ def aplicar(plan: Plan, cancelar: threading.Event | None = None,
                 # actuar, restore sabe que el movimiento pudo ocurrir.
                 if accion.tipo == "mover":
                     destino = _preparar_movimiento(plan, accion, dispositivo, hashes, cancelar)
-                    log.escribir({"tipo": "intento", "origen": accion.ruta, "destino": destino})
+                    log.escribir({"tipo": "intento", "origen": accion.ruta, "destino": destino},
+                                 sincronizar=True)
                     mover_sin_sobrescribir(accion.ruta, destino)
                     resultado.movidos.append((accion.ruta, destino))
                     log.escribir({"tipo": "movido", "origen": accion.ruta, "destino": destino,
@@ -433,7 +445,7 @@ def aplicar(plan: Plan, cancelar: threading.Event | None = None,
                                   "tamano": accion.esperado.tamano if accion.esperado else None})
                 else:
                     ruta = _preparar_rmdir(plan, accion)
-                    log.escribir({"tipo": "intento_rmdir", "ruta": ruta})
+                    log.escribir({"tipo": "intento_rmdir", "ruta": ruta}, sincronizar=True)
                     os.rmdir(para_os(ruta))  # solo borra carpetas vacías; si no lo está, falla
                     resultado.carpetas.append(accion.ruta)
                     log.escribir({"tipo": "rmdir", "ruta": accion.ruta})
@@ -522,6 +534,8 @@ def leer_log(ruta: str | os.PathLike[str]) -> LogCuarentena:
     log = LogCuarentena(raiz=raiz, cuarentena=cuarentena, movidos=[], carpetas=[],
                         lineas_ignoradas=ignoradas)
     confirmados: set[tuple[str, str]] = set()
+    pares_vistos: set[tuple[str, str]] = set()  # conjuntos auxiliares: lectura lineal
+    carpetas_vistas: set[str] = set()
     for entrada in lineas[1:]:
         if not isinstance(entrada, dict):
             log.lineas_ignoradas += 1
@@ -530,14 +544,16 @@ def leer_log(ruta: str | os.PathLike[str]) -> LogCuarentena:
         if tipo in ("intento", "movido") and isinstance(entrada.get("origen"), str) \
                 and isinstance(entrada.get("destino"), str):
             par = (entrada["origen"], entrada["destino"])
-            if par not in log.movidos:
+            if par not in pares_vistos:
+                pares_vistos.add(par)
                 log.movidos.append(par)
             if tipo == "movido":
                 confirmados.add(par)
         elif tipo in ("intento_rmdir", "rmdir") and isinstance(entrada.get("ruta"), str):
-            if entrada["ruta"] not in log.carpetas:
+            if entrada["ruta"] not in carpetas_vistas:
+                carpetas_vistas.add(entrada["ruta"])
                 log.carpetas.append(entrada["ruta"])
-    log.sin_confirmar = set(log.movidos) - confirmados
+    log.sin_confirmar = pares_vistos - confirmados
     return log
 
 
@@ -556,7 +572,7 @@ def restaurar(ruta_log: str | os.PathLike[str], permitir_sistema: bool = False,
     resultado = Resultado()
     if log.lineas_ignoradas:
         resultado.avisos.append(
-            f"se han ignorado {log.lineas_ignoradas} líneas incompletas o corruptas del log "
+            f"se han ignorado {plural(log.lineas_ignoradas, 'línea incompleta o corrupta', 'líneas incompletas o corruptas')} del log "
             "(p. ej. por un corte durante apply); revisa la cuarentena por si queda algo")
     registro = _Log(_ruta_log(os.path.dirname(os.path.abspath(ruta_log)), "restauracion_log"),
                     {"herramienta": f"organizador-archivos {__version__}", "raiz": raiz,
@@ -590,15 +606,20 @@ def restaurar(ruta_log: str | os.PathLike[str], permitir_sistema: bool = False,
             except RutaNoPermitida as e:
                 omitir(origen, str(e))
                 continue
+            # Intento sin confirmar y sin archivo en cuarentena: el movimiento no llegó a
+            # ocurrir (p. ej. archivo bloqueado). Se salta en silencio antes de mirar el
+            # origen, que sigue en su sitio y no es un conflicto.
+            sin_confirmar = (origen, destino) in log.sin_confirmar
+            if sin_confirmar and not os.path.lexists(para_os(destino_real)):
+                continue
             if os.path.lexists(para_os(origen_real)):
                 omitir(origen_real, "ya existe un archivo en la ruta original; no se sobrescribe")
                 continue
             try:
                 st = os.lstat(para_os(destino_real))
             except FileNotFoundError:
-                if (origen, destino) not in log.sin_confirmar:
+                if not sin_confirmar:
                     omitir(destino_real, "no está en la cuarentena")
-                # Intento sin confirmar y sin archivo en cuarentena: el movimiento no llegó a ocurrir.
                 continue
             if es_enlace(st) or not stat.S_ISREG(st.st_mode):
                 omitir(destino_real, "no es un archivo regular")

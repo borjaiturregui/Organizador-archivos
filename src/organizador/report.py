@@ -189,7 +189,8 @@ class Informe:
             f"Raíz analizada: {self.raiz}",
             f"Archivos: {r['archivos']} ({tamano_legible(r['bytes'])})",
             "",
-            f"Duplicados: {r['grupos_duplicados']} grupos, {r['copias_sobrantes']} copias sobrantes, "
+            f"Duplicados: {plural(r['grupos_duplicados'], 'grupo')}, "
+            f"{plural(r['copias_sobrantes'], 'copia sobrante', 'copias sobrantes')}, "
             f"{tamano_legible(r['bytes_recuperables'])} recuperables",
         ]
         for g in sorted(self.duplicados, key=lambda g: -g.recuperable)[:limite]:
@@ -219,6 +220,11 @@ def tamano_legible(n: int) -> str:
             return f"{valor:.0f} {unidad}" if unidad == "B" else f"{valor:.1f} {unidad}"
         valor /= 1024
     return f"{n} B"  # pragma: no cover
+
+
+def plural(n: int, singular: str, en_plural: str | None = None) -> str:
+    """'1 archivo', '2 archivos'; ``en_plural`` para formas irregulares."""
+    return f"{n} {singular if n == 1 else (en_plural or singular + 's')}"
 
 
 def relativa(ruta: str, raiz: str) -> str:

@@ -29,7 +29,7 @@ from organizador.quarantine import (
     restaurar,
     seleccion_por_categorias,
 )
-from organizador.report import Informe, InformeInvalido, relativa, tamano_legible
+from organizador.report import Informe, InformeInvalido, plural, relativa, tamano_legible
 from organizador.rutas import RutaNoPermitida
 
 app = typer.Typer(
@@ -206,11 +206,11 @@ def apply(
     for accion in plan.a_eliminar:
         typer.echo(f"  rmdir   {relativa(accion.ruta, plan.raiz)}")
     if plan.omitidos:
-        typer.echo(f"\nSe omitirán {len(plan.omitidos)} elementos:")
+        typer.echo(f"\nOmitidos ({len(plan.omitidos)}):")
         for i in plan.omitidos:
             typer.echo(f"  omitir  {relativa(i.ruta, plan.raiz)}  ({i.motivo})")
-    typer.echo(f"\nTotal: {len(plan.a_mover)} archivos ({tamano_legible(plan.bytes)}) a cuarentena, "
-               f"{len(plan.a_eliminar)} carpetas vacías a eliminar.")
+    typer.echo(f"\nTotal: {plural(len(plan.a_mover), 'archivo')} ({tamano_legible(plan.bytes)}) a cuarentena, "
+               f"{plural(len(plan.a_eliminar), 'carpeta vacía', 'carpetas vacías')} a eliminar.")
 
     if simular:
         typer.echo("Simulación: no se ha modificado nada.")
@@ -226,7 +226,7 @@ def apply(
             resultado = aplicar(plan, cancelar=cancelar, progreso=_progreso())
         except OperacionRechazada as e:
             raise _error(str(e)) from None
-    _mostrar_resultado(resultado, "movidos a cuarentena")
+    _mostrar_resultado(resultado, "movidos a cuarentena", "movido a cuarentena")
     typer.echo(f"Para deshacer: organizador restore \"{resultado.log}\"")
     if resultado.cancelado:
         raise typer.Exit(130)
@@ -244,10 +244,12 @@ def restore(
         datos = leer_log(log)
     except (OSError, ValueError, OperacionRechazada) as e:
         raise _error(f"no se puede leer el log: {e}") from None
-    typer.echo(f"Raíz: {datos.raiz}\nSe restaurarán hasta {len(datos.movidos)} archivos "
-               f"y {len(datos.carpetas)} carpetas.")
+    typer.echo(f"Raíz: {datos.raiz}\nA restaurar como máximo: {plural(len(datos.movidos), 'archivo')} "
+               f"y {plural(len(datos.carpetas), 'carpeta')}.")
     if datos.lineas_ignoradas:
-        typer.secho(f"Aviso: {datos.lineas_ignoradas} líneas incompletas o corruptas del log se ignorarán "
+        n = datos.lineas_ignoradas
+        typer.secho(f"Aviso: se {'ignorará' if n == 1 else 'ignorarán'} "
+                    f"{plural(n, 'línea incompleta o corrupta', 'líneas incompletas o corruptas')} del log "
                     "(p. ej. por un corte durante apply).", fg=typer.colors.YELLOW)
     if not (datos.movidos or datos.carpetas):
         typer.echo("Nada que restaurar.")
@@ -259,16 +261,18 @@ def restore(
             resultado = restaurar(log, permitir_sistema=permitir_sistema, cancelar=cancelar)
         except OperacionRechazada as e:
             raise _error(str(e)) from None
-    _mostrar_resultado(resultado, "restaurados")
+    _mostrar_resultado(resultado, "restaurados", "restaurado")
     if resultado.cancelado:
         raise typer.Exit(130)
 
 
-def _mostrar_resultado(resultado: Resultado, verbo: str) -> None:
-    typer.secho(f"\n{len(resultado.movidos)} archivos {verbo}; {len(resultado.carpetas)} carpetas.",
+def _mostrar_resultado(resultado: Resultado, verbo: str, verbo_singular: str) -> None:
+    n = len(resultado.movidos)
+    typer.secho(f"\n{plural(n, 'archivo')} {verbo if n != 1 else verbo_singular}; "
+                f"{plural(len(resultado.carpetas), 'carpeta')}.",
                 fg=typer.colors.GREEN)
     if resultado.omitidos:
-        typer.secho(f"{len(resultado.omitidos)} omitidos:", fg=typer.colors.YELLOW)
+        typer.secho(f"Omitidos ({len(resultado.omitidos)}):", fg=typer.colors.YELLOW)
         for i in resultado.omitidos:
             typer.echo(f"  {i.ruta}  ({i.motivo})")
     for aviso in resultado.avisos:
