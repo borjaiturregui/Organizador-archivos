@@ -47,6 +47,11 @@ function tamano(n) {
   return i === 0 ? `${v} B` : `${v.toFixed(1)} ${unidades[i]}`;
 }
 
+// "1 archivo", "2 archivos"; enPlural para formas irregulares.
+function plural(n, singular, enPlural) {
+  return `${n} ${n === 1 ? singular : (enPlural || singular + "s")}`;
+}
+
 function lista(texto) {
   return texto.split(",").map((s) => s.trim()).filter(Boolean);
 }
@@ -231,7 +236,8 @@ function resumenSeleccion() {
 
 function actualizarSeleccion() {
   const r = resumenSeleccion();
-  $("seleccion").textContent = `${r.archivos} archivos (${tamano(r.bytes)}) y ${r.carpetas} carpetas seleccionados`;
+  $("seleccion").textContent =
+    `Seleccionado: ${plural(r.archivos, "archivo")} (${tamano(r.bytes)}) y ${plural(r.carpetas, "carpeta")}`;
   $("btn-aplicar").disabled = !analisisId || r.archivos + r.carpetas === 0 || trabajoActual !== null;
 }
 
@@ -239,8 +245,8 @@ function actualizarSeleccion() {
 $("btn-aplicar").addEventListener("click", () => {
   const r = resumenSeleccion();
   $("dialogo-texto").textContent =
-    `Se moverán hasta ${r.archivos} archivos (${tamano(r.bytes)}) a la cuarentena y se eliminarán hasta ` +
-    `${r.carpetas} carpetas vacías. Lo que no supere la revalidación se omitirá. ¿Continuar?`;
+    `A la cuarentena, como máximo: ${plural(r.archivos, "archivo")} (${tamano(r.bytes)}). ` +
+    `Carpetas vacías a eliminar, como máximo: ${r.carpetas}. Lo que no supere la revalidación se omitirá. ¿Continuar?`;
   $("dialogo").showModal();
 });
 
@@ -262,10 +268,10 @@ function pintarAplicado(a) {
   const omitidos = a.omitidos.map((i) => el("li", {}, el("code", { texto: i.ruta }), ` — ${i.motivo}`));
   const hijos = [
     el("h2", { texto: a.cancelado ? "Aplicación cancelada" : "Cambios aplicados", clase: a.cancelado ? "error" : "ok" }),
-    el("p", { texto: `${a.movidos} archivos movidos a cuarentena y ${a.carpetas} carpetas vacías eliminadas.` }),
+    el("p", { texto: `Movidos a cuarentena: ${plural(a.movidos, "archivo")}. Carpetas vacías eliminadas: ${a.carpetas}.` }),
     el("p", {}, "Log: ", el("code", { texto: a.log || "" })),
     el("p", { clase: "nota" }, "Para deshacer: ", el("code", { texto: `organizador restore "${a.log}"` })),
-    omitidos.length ? el("details", {}, el("summary", { texto: `${omitidos.length} omitidos` }), el("ul", {}, ...omitidos)) : null,
+    omitidos.length ? el("details", {}, el("summary", { texto: `Omitidos (${omitidos.length})` }), el("ul", {}, ...omitidos)) : null,
     el("p", { clase: "nota", texto: "Vuelve a analizar para ver el estado actual de la carpeta." }),
   ];
   s.replaceChildren(...hijos.filter(Boolean));

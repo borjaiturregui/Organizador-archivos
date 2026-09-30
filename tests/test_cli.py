@@ -36,7 +36,7 @@ def test_analyze_con_salidas(raiz: Path, tmp_path: Path) -> None:
     salida, csv = tmp_path / "informe.json", tmp_path / "informe.csv"
     r = invocar("analyze", raiz, "--output", salida, "--csv", csv)
     assert r.exit_code == 0, r.output
-    assert "Duplicados: 1 grupos" in r.output
+    assert "Duplicados: 1 grupo, 1 copia sobrante" in r.output
     assert os.path.join("sub", "b.txt") in r.output  # rutas relativas en consola
     datos = json.loads(salida.read_text(encoding="utf-8"))
     assert datos["raiz"] == str(raiz)
@@ -93,7 +93,7 @@ def test_apply_y_restore(raiz: Path, tmp_path: Path) -> None:
     invocar("analyze", raiz, "-o", informe)
     r = invocar("apply", informe, "--yes", "--vacias")
     assert r.exit_code == 0, r.output
-    assert "2 archivos movidos" in r.output
+    assert "2 archivos movidos a cuarentena" in r.output
     assert not (raiz / "sub/b.txt").exists() and not (raiz / "t.tmp").exists()
     assert not (raiz / "vacia").exists()
     logs = list((raiz / NOMBRE_CUARENTENA).glob("cuarentena_log_*.jsonl"))

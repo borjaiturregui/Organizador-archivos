@@ -345,7 +345,7 @@ def test_restaurar_con_ultima_linea_cortada(raiz: Path) -> None:
     Path(resultado.log).write_text(texto[:-15], encoding="utf-8")  # apagón a mitad de línea
     rest = restaurar(resultado.log)
     assert len(rest.movidos) == 3
-    assert rest.avisos and "1 líneas incompletas" in rest.avisos[0]
+    assert rest.avisos and "1 línea incompleta o corrupta" in rest.avisos[0]
     assert len(list(raiz.glob("*.tmp"))) == 3
 
 
@@ -395,3 +395,55 @@ def test_cuarentena_personalizada_se_excluye_despues(raiz: Path) -> None:
     informe = analizar(raiz)
     assert informe.basura == [] and informe.total_archivos == 0
     assert any(i.motivo == "carpeta de cuarentena" for i in informe.omitidos)
+
+
+# ------------------------------------------------- regresiones de la 1.0.1
+def test_movimiento_fallido_y_restore_sin_omitidos(raiz: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Archivo bloqueado (habitual en Windows): apply lo omite y restore no confunde."""
+    crear(raiz, "a.tmp", "x")
+    bloqueado = crear(raiz, "bloqueado.tmp", "y")
+    plan = plan_por_categorias(analizar(raiz), "basura")
+    real = quarantine.mover_sin_sobrescribir
+
+    def falso(origen: str, destino: str) -> None:
+        if origen.endswith("bloqueado.tmp"):
+            raise PermissionError(13, "archivo en uso por otro proceso")
+        real(origen, destino)
+
+    monkeypatch.setattr(quarantine, "mover_sin_sobrescribir", falso)
+    resultado = aplicar(plan)
+    assert len(resultado.movidos) == 1 and bloqueado.exists()
+    monkeypatch.setattr(quarantine, "mover_sin_sobrescribir", real)
+    rest = restaurar(resultado.log)
+    assert len(rest.movidos) == 1
+    assert rest.omitidos == []
+
+
+def test_leer_log_grande_es_lineal(tmp_path: Path) -> None:
+    import time
+
+    ruta = tmp_path / "grande.jsonl"
+    with open(ruta, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"tipo": "cabecera", "raiz": "/r", "cuarentena": "/r/q"}) + "\n")
+        for i in range(25_000):  # 50 000 entradas: intento + movido por archivo
+            par = {"origen": f"/r/{i}", "destino": f"/r/q/{i}"}
+            f.write(json.dumps({"tipo": "intento", **par}) + "\n")
+            f.write(json.dumps({"tipo": "movido", **par}) + "\n")
+    inicio = time.perf_counter()
+    log = leer_log(ruta)
+    duracion = time.perf_counter() - inicio
+    assert len(log.movidos) == 25_000 and not log.sin_confirmar
+    # Lineal: ~0,3 s. La versión cuadrática tardaba decenas de segundos; el margen
+    # evita falsos fallos en runners lentos sin dejar de detectar la regresión.
+    assert duracion < 2, f"leer_log tardó {duracion:.2f} s"
+
+
+def test_un_solo_fsync_por_movimiento(raiz: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for i in range(5):
+        crear(raiz, f"f{i}.tmp", str(i))
+    plan = plan_por_categorias(analizar(raiz), "basura")
+    llamadas = []
+    real = os.fsync
+    monkeypatch.setattr(quarantine.os, "fsync", lambda fd: (llamadas.append(fd), real(fd)))
+    aplicar(plan)
+    assert len(llamadas) == 5 + 1  # un "intento" por archivo + el cierre del log

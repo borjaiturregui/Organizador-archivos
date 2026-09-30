@@ -1,6 +1,6 @@
 """organizador-archivos: análisis y organización segura de archivos."""
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 NOMBRE_CUARENTENA = "_cuarentena_organizador"
 # Archivo que identifica una carpeta de cuarentena, se llame como se llame.
