@@ -156,25 +156,44 @@ function pintarResultados(r) {
   cont.append(categoria("Basura / temporales", r.basura.length, "", r.basura.map((a) => filaArchivo(a, !a.conservada)), true));
   cont.append(categoria("Archivos grandes", r.grandes.length, "Solo se mueven si los marcas tú.", r.grandes.map((a) => filaArchivo(a, false)), true));
   cont.append(categoria("Carpetas vacías", r.vacias.length, "Se eliminan con rmdir (solo si siguen vacías) y quedan en el log.",
-    r.vacias.map((v) => el("tr", {}, el("td", {}, casilla(v.id, false, false)), el("td", { clase: "ruta", texto: v.ruta, colSpan: 3 }))), true));
+    r.vacias.map((v) => el("tr", {}, el("td", {}, casilla(v.id, false, false, v.ruta)), el("td", { clase: "ruta", texto: v.ruta, colSpan: 3 }))), true));
   cont.append(categoria("Archivos de 0 bytes", r.cero_bytes.length, "Solo informativo.", r.cero_bytes.map((a) => filaArchivo(a, false, true)), false));
   cont.append(categoria("Enlaces duros", r.enlaces_duros.length, "Moverlos no libera espacio: solo se informan.",
     r.enlaces_duros.map((g) => el("tr", {}, el("td", { clase: "ruta", colSpan: 4, texto: g.archivos.join("  =  ") }))), false));
   const incidencias = r.omitidos.concat(r.errores);
   cont.append(categoria("Omitidos y errores", incidencias.length, "",
     incidencias.map((i) => el("tr", {}, el("td", { clase: "ruta", colSpan: 3, texto: i.ruta }), el("td", { texto: i.motivo }))), false));
+  unificarCasillas();
   actualizarSeleccion();
 }
 
-function casilla(id, marcada, bloqueada) {
+// Un mismo archivo puede aparecer en varias categorías (p. ej. un .bak duplicado):
+// sus casillas se mantienen sincronizadas y se cuenta una sola vez.
+function casilla(id, marcada, bloqueada, ruta) {
   const c = el("input", { type: "checkbox", checked: marcada, disabled: bloqueada });
   c.dataset.id = id;
-  c.addEventListener("change", actualizarSeleccion);
+  c.dataset.ruta = ruta;
+  c.addEventListener("change", () => {
+    for (const otra of casillasDe(ruta)) if (!otra.disabled) otra.checked = c.checked;
+    actualizarSeleccion();
+  });
   return c;
 }
 
+function casillasDe(ruta) {
+  return [...document.querySelectorAll("#categorias input[type=checkbox]")].filter((c) => c.dataset.ruta === ruta);
+}
+
+// Si un archivo está marcado en alguna categoría, se marca en todas.
+function unificarCasillas() {
+  const marcadas = new Set(seleccionados().map((c) => c.dataset.ruta));
+  for (const c of document.querySelectorAll("#categorias input[type=checkbox]")) {
+    if (!c.disabled && marcadas.has(c.dataset.ruta)) c.checked = true;
+  }
+}
+
 function filaArchivo(a, marcada, sinCasilla = false) {
-  const primera = sinCasilla ? el("td") : el("td", {}, casilla(a.id, marcada && !a.conservada, a.conservada));
+  const primera = sinCasilla ? el("td") : el("td", {}, casilla(a.id, marcada && !a.conservada, a.conservada, a.ruta));
   const ruta = el("td", { clase: "ruta", texto: a.ruta });
   if (a.conservada) ruta.append(" ", el("span", { clase: "etiqueta", texto: "se conserva" }));
   if (!sinCasilla) primera.firstChild.dataset.tamano = a.tamano;
@@ -197,20 +216,31 @@ function seleccionados() {
   return [...vistos.values()];
 }
 
+// Recuento por archivo único, que es lo que el servidor moverá como máximo.
+function resumenSeleccion() {
+  const archivos = new Map();
+  const carpetas = new Set();
+  for (const c of seleccionados()) {
+    if (c.dataset.id.startsWith("v")) carpetas.add(c.dataset.ruta);
+    else archivos.set(c.dataset.ruta, Number(c.dataset.tamano || 0));
+  }
+  let bytes = 0;
+  for (const t of archivos.values()) bytes += t;
+  return { archivos: archivos.size, bytes, carpetas: carpetas.size };
+}
+
 function actualizarSeleccion() {
-  const sel = seleccionados();
-  const archivos = sel.filter((c) => !c.dataset.id.startsWith("v"));
-  const bytes = archivos.reduce((s, c) => s + Number(c.dataset.tamano || 0), 0);
-  $("seleccion").textContent = `${archivos.length} archivos (${tamano(bytes)}) y ${sel.length - archivos.length} carpetas seleccionados`;
-  $("btn-aplicar").disabled = !analisisId || sel.length === 0 || trabajoActual !== null;
+  const r = resumenSeleccion();
+  $("seleccion").textContent = `${r.archivos} archivos (${tamano(r.bytes)}) y ${r.carpetas} carpetas seleccionados`;
+  $("btn-aplicar").disabled = !analisisId || r.archivos + r.carpetas === 0 || trabajoActual !== null;
 }
 
 // --------------------------------------------------------------------- aplicar
 $("btn-aplicar").addEventListener("click", () => {
-  const sel = seleccionados();
-  const carpetas = sel.filter((c) => c.dataset.id.startsWith("v")).length;
+  const r = resumenSeleccion();
   $("dialogo-texto").textContent =
-    `Se moverán ${sel.length - carpetas} archivos a la cuarentena y se eliminarán ${carpetas} carpetas vacías. ¿Continuar?`;
+    `Se moverán hasta ${r.archivos} archivos (${tamano(r.bytes)}) a la cuarentena y se eliminarán hasta ` +
+    `${r.carpetas} carpetas vacías. Lo que no supere la revalidación se omitirá. ¿Continuar?`;
   $("dialogo").showModal();
 });
 

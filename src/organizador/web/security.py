@@ -16,7 +16,7 @@ import secrets
 
 from starlette.datastructures import Headers
 from starlette.responses import PlainTextResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 CABECERA_TESTIGO = "X-Testigo"
 HOST = "127.0.0.1"
@@ -78,7 +78,7 @@ class MiddlewareSeguridad:
             await respuesta(scope, receive, send)
             return
 
-        async def enviar(mensaje: dict) -> None:
+        async def enviar(mensaje: Message) -> None:
             if mensaje["type"] == "http.response.start":
                 mensaje.setdefault("headers", [])
                 mensaje["headers"] = list(mensaje["headers"]) + CABECERAS_SEGURIDAD

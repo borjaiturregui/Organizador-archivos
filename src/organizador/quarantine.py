@@ -24,8 +24,9 @@ import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
-from organizador import NOMBRE_CUARENTENA, __version__
+from organizador import MARCA_CUARENTENA, NOMBRE_CUARENTENA, __version__
 from organizador.analyzer import Cancelado, elegir_conservada, hash_archivo
 from organizador.report import Archivo, Incidencia, Informe
 from organizador.rutas import (
@@ -88,6 +89,7 @@ class Resultado:
     omitidos: list[Incidencia] = field(default_factory=list)
     log: str | None = None
     cancelado: bool = False
+    avisos: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -254,19 +256,20 @@ def planificar(informe: Informe, elegidos: Iterable[tuple[str, str]],
             carpetas.setdefault(k, Accion("rmdir", real, ["vacias"]))
             continue
 
+        esperado: Archivo | None
         if categoria == "duplicados":
-            n = grupo_de.get(clave(ruta))
-            esperado = miembros.get(n, {}).get(k) if n is not None else None
+            g = grupo_de.get(clave(ruta))
+            esperado = miembros.get(g, {}).get(k) if g is not None else None
             if esperado is None:
-                omitir(ruta, "no es un duplicado válido en el informe" if n is None
+                omitir(ruta, "no es un duplicado válido en el informe" if g is None
                        else "no supera la revalidación (cambiado, inexistente o fuera de la raíz)")
                 continue
         else:
-            esperado = entradas[categoria].get(clave(ruta))
-            if esperado is None:
+            listado = entradas[categoria].get(clave(ruta))
+            if listado is None:
                 omitir(ruta, f"no figura en la categoría '{categoria}' del informe")
                 continue
-            esperado = Archivo(real, esperado.tamano, esperado.mtime_ns)
+            esperado = Archivo(real, listado.tamano, listado.mtime_ns)
 
         if k in protegidas:
             omitir(real, "es la copia conservada de un grupo de duplicados (≥1 copia)")
@@ -274,9 +277,9 @@ def planificar(informe: Informe, elegidos: Iterable[tuple[str, str]],
 
         accion = finales.get(k)
         if accion is None:
-            n = grupo_de.get(k, grupo_de.get(clave(ruta)))
+            n_grupo = grupo_de.get(k, grupo_de.get(clave(ruta)))
             accion = Accion("mover", real, [], esperado=esperado,
-                            conservada=conservada_de.get(n) if n is not None else None)
+                            conservada=conservada_de.get(n_grupo) if n_grupo is not None else None)
             finales[k] = accion
         if categoria not in accion.categorias:
             accion.categorias.append(categoria)
@@ -293,9 +296,10 @@ def planificar(informe: Informe, elegidos: Iterable[tuple[str, str]],
 
     # Carpetas vacías: las más profundas primero, después de mover archivos.
     plan.acciones.extend(sorted(carpetas.values(), key=lambda a: (-a.ruta.count(os.sep), a.ruta)))
-    vistos: set[tuple[str, str]] = set()
-    plan.omitidos = [i for i in plan.omitidos
-                     if (i.ruta, i.motivo) not in vistos and not vistos.add((i.ruta, i.motivo))]
+    unicos: dict[tuple[str, str], Incidencia] = {}
+    for i in plan.omitidos:
+        unicos.setdefault((i.ruta, i.motivo), i)
+    plan.omitidos = list(unicos.values())
     return plan
 
 
@@ -396,6 +400,9 @@ def aplicar(plan: Plan, cancelar: threading.Event | None = None,
     dispositivo = st_c.st_dev
     if dispositivo != os.stat(para_os(plan.raiz)).st_dev:
         raise OperacionRechazada("la cuarentena está en otro volumen")
+    # La marca permite excluir la cuarentena en análisis futuros aunque tenga otro nombre.
+    with open(para_os(os.path.join(plan.cuarentena, MARCA_CUARENTENA)), "a", encoding="utf-8"):
+        pass
 
     log = _Log(ruta_log or _ruta_log(plan.cuarentena, "cuarentena_log"), {
         "herramienta": f"organizador-archivos {__version__}",
@@ -414,14 +421,20 @@ def aplicar(plan: Plan, cancelar: threading.Event | None = None,
             if cancelar is not None and cancelar.is_set():
                 raise Cancelado()
             try:
+                # Registro previo (write-ahead): si el proceso muere entre anotar y
+                # actuar, restore sabe que el movimiento pudo ocurrir.
                 if accion.tipo == "mover":
-                    destino = _mover(plan, accion, dispositivo, hashes, cancelar)
+                    destino = _preparar_movimiento(plan, accion, dispositivo, hashes, cancelar)
+                    log.escribir({"tipo": "intento", "origen": accion.ruta, "destino": destino})
+                    mover_sin_sobrescribir(accion.ruta, destino)
                     resultado.movidos.append((accion.ruta, destino))
                     log.escribir({"tipo": "movido", "origen": accion.ruta, "destino": destino,
                                   "categorias": accion.categorias,
                                   "tamano": accion.esperado.tamano if accion.esperado else None})
                 else:
-                    _rmdir(plan, accion)
+                    ruta = _preparar_rmdir(plan, accion)
+                    log.escribir({"tipo": "intento_rmdir", "ruta": ruta})
+                    os.rmdir(para_os(ruta))  # solo borra carpetas vacías; si no lo está, falla
                     resultado.carpetas.append(accion.ruta)
                     log.escribir({"tipo": "rmdir", "ruta": accion.ruta})
             except (ValueError, RutaNoPermitida, OSError) as e:
@@ -437,8 +450,9 @@ def aplicar(plan: Plan, cancelar: threading.Event | None = None,
     return resultado
 
 
-def _mover(plan: Plan, accion: Accion, dispositivo: int, hashes: dict[str, str],
-           cancelar: threading.Event | None) -> str:
+def _preparar_movimiento(plan: Plan, accion: Accion, dispositivo: int, hashes: dict[str, str],
+                         cancelar: threading.Event | None) -> str:
+    """Revalida el origen y la copia conservada y devuelve un destino libre en cuarentena."""
     origen = _ruta_segura(accion.ruta, plan.raiz, plan.cuarentena)
     st = _comprobar_archivo(origen, accion.esperado)  # type: ignore[arg-type]
     if st.st_dev != dispositivo:
@@ -457,16 +471,15 @@ def _mover(plan: Plan, accion: Accion, dispositivo: int, hashes: dict[str, str],
                 raise ValueError("el contenido ya no coincide con la copia conservada")
     destino = _destino_libre(plan.cuarentena, plan.raiz, origen)
     os.makedirs(para_os(os.path.dirname(destino)), exist_ok=True)
-    mover_sin_sobrescribir(origen, destino)
     return destino
 
 
-def _rmdir(plan: Plan, accion: Accion) -> None:
+def _preparar_rmdir(plan: Plan, accion: Accion) -> str:
     ruta = _ruta_segura(accion.ruta, plan.raiz, plan.cuarentena)
     st = os.lstat(para_os(ruta))
     if es_enlace(st) or not stat.S_ISDIR(st.st_mode):
         raise ValueError("ya no es una carpeta normal")
-    os.rmdir(para_os(ruta))  # solo borra carpetas vacías; si no lo está, falla
+    return ruta
 
 
 # ---------------------------------------------------------------------------
@@ -478,27 +491,53 @@ class LogCuarentena:
     cuarentena: str
     movidos: list[tuple[str, str]]  # (origen, destino) en orden de ejecución
     carpetas: list[str]
+    sin_confirmar: set[tuple[str, str]] = field(default_factory=set)  # intento sin "movido"
+    lineas_ignoradas: int = 0
 
 
 def leer_log(ruta: str | os.PathLike[str]) -> LogCuarentena:
-    """Lee y valida un log de cuarentena (también es un dato no fiable)."""
-    with open(ruta, encoding="utf-8") as f:
-        lineas = [json.loads(linea) for linea in f if linea.strip()]
+    """Lee y valida un log de cuarentena (también es un dato no fiable).
+
+    Tolera líneas incompletas o corruptas (p. ej. la última tras un apagón): las
+    ignora y las cuenta en ``lineas_ignoradas``. La cabecera sí es obligatoria.
+    """
+    lineas: list[Any] = []
+    ignoradas = 0
+    with open(ruta, encoding="utf-8", errors="replace") as f:
+        for texto in f:
+            if not texto.strip():
+                continue
+            try:
+                lineas.append(json.loads(texto))
+            except json.JSONDecodeError:
+                if not lineas:
+                    raise OperacionRechazada("el log no tiene cabecera válida") from None
+                ignoradas += 1
     if not lineas or not isinstance(lineas[0], dict) or lineas[0].get("tipo") != "cabecera":
         raise OperacionRechazada("el log no tiene cabecera válida")
     cab = lineas[0]
     raiz, cuarentena = cab.get("raiz"), cab.get("cuarentena")
     if not isinstance(raiz, str) or not isinstance(cuarentena, str):
         raise OperacionRechazada("la cabecera del log no indica raíz y cuarentena")
-    log = LogCuarentena(raiz=raiz, cuarentena=cuarentena, movidos=[], carpetas=[])
+    log = LogCuarentena(raiz=raiz, cuarentena=cuarentena, movidos=[], carpetas=[],
+                        lineas_ignoradas=ignoradas)
+    confirmados: set[tuple[str, str]] = set()
     for entrada in lineas[1:]:
         if not isinstance(entrada, dict):
+            log.lineas_ignoradas += 1
             continue
-        if entrada.get("tipo") == "movido" and isinstance(entrada.get("origen"), str) \
+        tipo = entrada.get("tipo")
+        if tipo in ("intento", "movido") and isinstance(entrada.get("origen"), str) \
                 and isinstance(entrada.get("destino"), str):
-            log.movidos.append((entrada["origen"], entrada["destino"]))
-        elif entrada.get("tipo") == "rmdir" and isinstance(entrada.get("ruta"), str):
-            log.carpetas.append(entrada["ruta"])
+            par = (entrada["origen"], entrada["destino"])
+            if par not in log.movidos:
+                log.movidos.append(par)
+            if tipo == "movido":
+                confirmados.add(par)
+        elif tipo in ("intento_rmdir", "rmdir") and isinstance(entrada.get("ruta"), str):
+            if entrada["ruta"] not in log.carpetas:
+                log.carpetas.append(entrada["ruta"])
+    log.sin_confirmar = set(log.movidos) - confirmados
     return log
 
 
@@ -515,6 +554,10 @@ def restaurar(ruta_log: str | os.PathLike[str], permitir_sistema: bool = False,
         raise OperacionRechazada("cuarentena del log no válida")
 
     resultado = Resultado()
+    if log.lineas_ignoradas:
+        resultado.avisos.append(
+            f"se han ignorado {log.lineas_ignoradas} líneas incompletas o corruptas del log "
+            "(p. ej. por un corte durante apply); revisa la cuarentena por si queda algo")
     registro = _Log(_ruta_log(os.path.dirname(os.path.abspath(ruta_log)), "restauracion_log"),
                     {"herramienta": f"organizador-archivos {__version__}", "raiz": raiz,
                      "cuarentena": cuarentena, "log_original": os.path.abspath(ruta_log)})
@@ -553,7 +596,9 @@ def restaurar(ruta_log: str | os.PathLike[str], permitir_sistema: bool = False,
             try:
                 st = os.lstat(para_os(destino_real))
             except FileNotFoundError:
-                omitir(destino_real, "no está en la cuarentena")
+                if (origen, destino) not in log.sin_confirmar:
+                    omitir(destino_real, "no está en la cuarentena")
+                # Intento sin confirmar y sin archivo en cuarentena: el movimiento no llegó a ocurrir.
                 continue
             if es_enlace(st) or not stat.S_ISREG(st.st_mode):
                 omitir(destino_real, "no es un archivo regular")

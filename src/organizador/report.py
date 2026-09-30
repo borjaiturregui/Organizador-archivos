@@ -114,10 +114,11 @@ class Informe:
         if datos.get("version") != VERSION_INFORME:
             raise InformeInvalido(f"versión de informe no soportada: {datos.get('version')!r}")
         raiz = _texto(datos.get("raiz"), "raiz")
-        resumen = datos.get("resumen") if isinstance(datos.get("resumen"), dict) else {}
+        resumen = datos["resumen"] if isinstance(datos.get("resumen"), dict) else {}
+        opciones = datos["opciones"] if isinstance(datos.get("opciones"), dict) else {}
         return cls(
             raiz=raiz,
-            opciones=datos.get("opciones") if isinstance(datos.get("opciones"), dict) else {},
+            opciones=opciones,
             generado=str(datos.get("generado", "")),
             duplicados=[_grupo(g) for g in _lista(datos, "duplicados")],
             grandes=[_archivo(a) for a in _lista(datos, "grandes")],
@@ -166,8 +167,8 @@ class Informe:
                 w.writerow([categoria, "", a.ruta, a.tamano, iso(a.mtime_ns), ""])
         for v in self.vacias:
             w.writerow(["carpeta_vacia", "", v, "", "", ""])
-        for n, g in enumerate(self.enlaces_duros, 1):
-            for a in g.archivos:
+        for n, e in enumerate(self.enlaces_duros, 1):
+            for a in e.archivos:
                 w.writerow(["enlace_duro", n, a.ruta, a.tamano, iso(a.mtime_ns), ""])
         for i in self.omitidos:
             w.writerow(["omitido", "", i.ruta, "", "", i.motivo])

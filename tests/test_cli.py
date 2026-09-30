@@ -60,6 +60,14 @@ def test_analyze_ruta_de_sistema(raiz: Path) -> None:
     assert "--permitir-sistema" in r.output
 
 
+def test_analyze_output_en_carpeta_inexistente(raiz: Path, tmp_path: Path) -> None:
+    crear(raiz, "a.txt", "x")
+    for opcion in ("--output", "--csv"):
+        r = invocar("analyze", raiz, opcion, tmp_path / "no" / "existe" / "i.json")
+        assert r.exit_code == 1
+        assert "no existe" in r.output and "Traceback" not in r.output
+
+
 def test_analyze_ruta_inexistente(raiz: Path) -> None:
     assert invocar("analyze", raiz / "nada").exit_code == 1
 
